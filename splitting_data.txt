@@ -1,0 +1,12 @@
+Dataset 1 split:
+rwfilter --sport=5001-5002,5005-5006,5009-5010,5013-5014,5017-5018,5021-5022,5025-5026,5029-5030 --pass=dataset_A.rw mydataset.rw
+
+
+dataset 2 split: 
+rwfilter --sport=5003-5004,5007-5008,5011-5012,5015-5016,5019-5020,5023-5024,5027-5028,5031-5032 --pass=dataset_B.rw mydataset.rw
+
+
+If need to convert to csv:
+rwcut --fields=sip,dip,sport,dport,proto,bytes,packets,stime,etime dataset_A.rw > dataset_A.csv
+rwcut --fields=sip,dip,sport,dport,proto,bytes,packets,stime,etime dataset_B.rw > dataset_B.csv
+
