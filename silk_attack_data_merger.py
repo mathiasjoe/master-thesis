@@ -30,6 +30,28 @@ def modify_attack_timestamps(input_file, output_file, time_shift):
     cmd = f"rwset --time-after=now-{time_shift}s {input_file} | rwcut > {output_file}"
     subprocess.run(cmd, shell=True)
 
+def match_attack_timestamps_with_normal(input_file, output_file, normal_file):
+    """Modifies attack timestamps to match timestamps from normal traffic."""
+    
+    # Extract timestamps from normal dataset
+    cmd_extract_times = f"rwcut --fields=stime {normal_file}"
+    result = subprocess.run(cmd_extract_times, shell=True, capture_output=True, text=True)
+    
+    # Collect timestamps
+    normal_timestamps = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    
+    if not normal_timestamps:
+        print("No timestamps found in normal dataset. Using random shift instead.")
+        return modify_attack_timestamps(input_file, output_file, random.randint(60, 600))
+
+    # Randomly pick timestamps from normal traffic
+    selected_timestamp = random.choice(normal_timestamps)
+
+    # Apply the selected timestamp to attack flows
+    cmd_modify_time = f"rwset --time-after={selected_timestamp} {input_file} | rwcut > {output_file}"
+    subprocess.run(cmd_modify_time, shell=True)
+
+
 # Modify attack IPs to match common traffic patterns
 def modify_attack_ips(input_file, output_file, common_ips):
     """Replaces attack source and destination IPs with IPs found in normal traffic."""
@@ -77,7 +99,7 @@ if __name__ == "__main__":
     print("Modifying timestamps of attack dataset")
     modified_attacks = "modified_attacks.rw"
     time_shift = random.randint(*TIME_SHIFT_RANGE)
-    modify_attack_timestamps(ATTACK_DATASET, modified_attacks, time_shift)
+    match_attack_timestamps_with_normal(ATTACK_DATASET, modified_attacks, NORMAL_DATASET)
 
     print("Modifying attack IP addresses")
     ip_modified_attacks = "ip_modified_attacks.rw"
