@@ -1,63 +1,59 @@
 import subprocess
 import random
 import datetime
+import os
+from glob import glob
 
 # Configuration
-ATTACK_DATASET = "attacks.rw"  # The attack dataset
-NORMAL_DATASET = "normal_traffic.rw"  # The normal dataset
-OUTPUT_DATASET = "final_dataset.rw"  # The final merged dataset
-NUM_COPIES = 1  # Number of times to replicate attack traffic
-TIME_SHIFT_RANGE = (60, 600)  # Time shift in seconds 
+NORMAL_DATASET_DIRS = ["normal_folder1", "normal_folder2"]  # Update with your folder names
+ATTACK_DATASET = "attacks.rw"
+OUTPUT_FOLDER = "final_dataset_chunks"
+NUM_COPIES = 1
+TIME_SHIFT_RANGE = (60, 600)
 
-# Extract common IPs from the normal dataset
+# Get all .rw files from the normal traffic folders
+def get_all_normal_files(directories):
+    rw_files = []
+    for d in directories:
+        rw_files.extend(glob(os.path.join(d, "*.rw")))
+    return rw_files
+
+# Extract common IPs from a normal .rw file
 def extract_common_ips(dataset):
-    """Extracts frequently occurring source and destination IPs from a SiLK dataset."""
     cmd = f"rwstats --fields=sip,dip --count=50 {dataset}"
     result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-    
+
     ip_list = []
-    for line in result.stdout.splitlines()[1:]:  
+    for line in result.stdout.splitlines()[1:]:
         parts = line.split()
         if len(parts) >= 2:
-            ip_list.append(parts[0])  # Add source IP
-            ip_list.append(parts[1])  # Add destination IP
+            ip_list.append(parts[0])
+            ip_list.append(parts[1])
+    return list(set(ip_list))
 
-    return list(set(ip_list))  # Remove duplicates
-
-# Modify timestamps in attack records
+# Modify timestamps in attack records using time shift
 def modify_attack_timestamps(input_file, output_file, time_shift):
-    """Shifts the timestamp of attack flows by a given offset."""
     cmd = f"rwset --time-after=now-{time_shift}s {input_file} | rwcut > {output_file}"
     subprocess.run(cmd, shell=True)
 
+# Modify timestamps in attack records using timestamps from normal dataset
 def match_attack_timestamps_with_normal(input_file, output_file, normal_file):
-    """Modifies attack timestamps to match timestamps from normal traffic."""
-    
-    # Extract timestamps from normal dataset
     cmd_extract_times = f"rwcut --fields=stime {normal_file}"
     result = subprocess.run(cmd_extract_times, shell=True, capture_output=True, text=True)
-    
-    # Collect timestamps
     normal_timestamps = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    
+
     if not normal_timestamps:
         print("No timestamps found in normal dataset. Using random shift instead.")
-        return modify_attack_timestamps(input_file, output_file, random.randint(60, 600))
+        return modify_attack_timestamps(input_file, output_file, random.randint(*TIME_SHIFT_RANGE))
 
-    # Randomly pick timestamps from normal traffic
     selected_timestamp = random.choice(normal_timestamps)
-
-    # Apply the selected timestamp to attack flows
     cmd_modify_time = f"rwset --time-after={selected_timestamp} {input_file} | rwcut > {output_file}"
     subprocess.run(cmd_modify_time, shell=True)
 
-
-# Modify attack IPs to match common traffic patterns
+# Replace attack IPs with common IPs from normal dataset
 def modify_attack_ips(input_file, output_file, common_ips):
-    """Replaces attack source and destination IPs with IPs found in normal traffic."""
-    ip_mapping = {f"192.168.100.{i}": random.choice(common_ips) for i in range(10, 110)}  # Fake to real mapping
-    
-    # Process each record and replace IPs
+    ip_mapping = {f"192.168.100.{i}": random.choice(common_ips) for i in range(10, 110)}
+
     cmd = f"rwcut --fields=sip,dip,sport,dport,stime,etime,bytes,packets {input_file}"
     result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
 
@@ -65,51 +61,72 @@ def modify_attack_ips(input_file, output_file, common_ips):
     for line in result.stdout.splitlines():
         parts = line.split()
         if len(parts) >= 2:
-            parts[0] = ip_mapping.get(parts[0], parts[0])  # Source IP
-            parts[1] = ip_mapping.get(parts[1], parts[1])  # Destination IP
+            parts[0] = ip_mapping.get(parts[0], parts[0])
+            parts[1] = ip_mapping.get(parts[1], parts[1])
         modified_lines.append("\t".join(parts))
 
-    
     with open(output_file, "w") as f:
         f.write("\n".join(modified_lines))
 
-# Duplicate attack records
+# Duplicate attack flows
 def duplicate_attack_records(input_file, output_file, num_copies):
     cmd = f"rwcat {input_file} " + " ".join([input_file] * num_copies) + f" > {output_file}"
     subprocess.run(cmd, shell=True)
 
-# Merge and Sort Dataset
-def merge_and_sort_datasets(normal_file, attack_file, output_file):
-    """Merges normal and attack datasets, then sorts them by timestamp."""
-    merged_file = "merged_unsorted.rw"
-    
-    # Merge both datasets
-    cmd_merge = f"rwcat {normal_file} {attack_file} > {merged_file}"
-    subprocess.run(cmd_merge, shell=True)
+# Merge each normal file with a chunk of attack traffic
+def merge_and_sort_multiple(normal_files, attack_file, output_dir):
+    os.makedirs(output_dir, exist_ok=True)
 
-    # Sort dataset by timestamp
-    cmd_sort = f"rwsort --fields=stime {merged_file} > {output_file}"
-    subprocess.run(cmd_sort, shell=True)
+    print(f"Splitting attack dataset into {len(normal_files)} chunks...")
+    # Split attack file using rwsplit to create chunks for each normal file
+    split_prefix = "attack_chunk_"
+    subprocess.run(f"rwsplit --basename={split_prefix} --byte-limit=500K {attack_file}", shell=True)
 
-# **Main Execution**
+    # Get all generated attack chunks
+    attack_chunks = sorted(glob(f"{split_prefix}*.rw"))
+
+    for i, normal_file in enumerate(normal_files):
+        chunk_file = attack_chunks[i % len(attack_chunks)] if attack_chunks else None
+        output_file = os.path.join(output_dir, f"merged_{i}.rw")
+
+        if chunk_file and os.path.exists(chunk_file):
+            temp_merge = f"temp_merge_{i}.rw"
+            subprocess.run(f"rwcat {normal_file} {chunk_file} > {temp_merge}", shell=True)
+            subprocess.run(f"rwsort --fields=stime {temp_merge} > {output_file}", shell=True)
+            os.remove(temp_merge)
+        else:
+            # Just sort normal file if no chunk is left
+            subprocess.run(f"rwsort --fields=stime {normal_file} > {output_file}", shell=True)
+
+# === Main Execution ===
 if __name__ == "__main__":
-    print("Extracting common IPs from normal dataset")
-    common_ips = extract_common_ips(NORMAL_DATASET)
+    print("Gathering normal dataset files...")
+    normal_files = get_all_normal_files(NORMAL_DATASET_DIRS)
 
-    print("Modifying timestamps of attack dataset")
+    if not normal_files:
+        print("No normal dataset files found. Check your folder paths.")
+        exit(1)
+
+    print("Extracting common IPs from all normal files...")
+    common_ips = []
+    for f in normal_files:
+        common_ips += extract_common_ips(f)
+    common_ips = list(set(common_ips))
+
+    print("Modifying timestamps of attack dataset...")
     modified_attacks = "modified_attacks.rw"
-    time_shift = random.randint(*TIME_SHIFT_RANGE)
-    match_attack_timestamps_with_normal(ATTACK_DATASET, modified_attacks, NORMAL_DATASET)
+    random_normal = random.choice(normal_files)
+    match_attack_timestamps_with_normal(ATTACK_DATASET, modified_attacks, random_normal)
 
-    print("Modifying attack IP addresses")
+    print("Modifying IPs in attack flows...")
     ip_modified_attacks = "ip_modified_attacks.rw"
     modify_attack_ips(modified_attacks, ip_modified_attacks, common_ips)
 
-    print("Duplicating attack records")
+    print("Duplicating attack records...")
     duplicated_attacks = "duplicated_attacks.rw"
     duplicate_attack_records(ip_modified_attacks, duplicated_attacks, NUM_COPIES)
 
-    print("Merging attack dataset with normal dataset")
-    merge_and_sort_datasets(NORMAL_DATASET, duplicated_attacks, OUTPUT_DATASET)
+    print("Merging attack traffic into multiple normal files...")
+    merge_and_sort_multiple(normal_files, duplicated_attacks, OUTPUT_FOLDER)
 
-    print(f" Attack injection completed! Final dataset saved as {OUTPUT_DATASET}")
+    print(f"\n✅ Attack injection completed! Final dataset is saved in '{OUTPUT_FOLDER}' folder.")

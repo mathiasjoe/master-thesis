@@ -4,7 +4,7 @@ import random
 import ipaddress
 
 # Target Machine
-VICTIM_IP = "192.168.1.100"  # Replace with actual target IP
+VICTIM_IP = "192.168.50.10"  # Replace with actual target IP
 
 # Botnet Size Range
 BOTNET_SIZE_RANGE = [50, 171, 233, 340, 500]  
