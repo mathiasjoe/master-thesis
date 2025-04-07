@@ -52,7 +52,7 @@ print(confusion_matrix(y_test, y_pred))
 
 # Save model and encoders
 joblib.dump(clf, "rf_model.pkl")
-joblib.dump(le_label, "label_encoder.pkl")
-joblib.dump(le_ip, "ip_encoder.pkl")
+joblib.dump(le_label, "rf_label_encoder.pkl")
+joblib.dump(le_ip, "rf_ip_encoder.pkl")
 
 print("\n💾 Model and encoders saved!")
