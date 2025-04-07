@@ -55,4 +55,4 @@ joblib.dump(clf, "rf_model.pkl")
 joblib.dump(le_label, "rf_label_encoder.pkl")
 joblib.dump(le_ip, "rf_ip_encoder.pkl")
 
-print("\n💾 Model and encoders saved!")
+print("\n Model and encoders saved!")
