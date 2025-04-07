@@ -4,11 +4,11 @@ import os
 from glob import glob
 
 # === CONFIG ===
-input_folder = "final_dataset_01"  # Folder with .rw files
-output_csv_file = "training_dataset.csv"
-temp_folder = "temp_csv_parts"
+input_folder = "final_dataset_01"      # Folder with .rw files
+output_folder = "training_data"   # Where labeled CSVs will go
+os.makedirs(output_folder, exist_ok=True)
 
-# Ports mapped to attack labels
+# Port to label mapping
 attack_port_map = {
     6001: "slow_read",
     6002: "rudy",
@@ -20,51 +20,51 @@ attack_port_map = {
     6008: "slowloris"
 }
 
-# Fields to extract from rw file
+# Fields to extract
 fields = "sip,dip,sport,dport,stime,etime,proto,packets,bytes"
 
+# Max rows per output CSV 
+max_rows_per_csv = 100_000
 
-def extract_folder_to_csv(folder, temp_output_dir):
-    os.makedirs(temp_output_dir, exist_ok=True)
-    rw_files = glob(os.path.join(folder, "*"))
 
-    temp_csvs = []
-    for i, rw_file in enumerate(rw_files):
-        temp_csv = os.path.join(temp_output_dir, f"part_{i}.csv")
-        cmd = [
+def convert_and_label(input_rw, output_prefix, part_num):
+    temp_csv = f"{output_prefix}_raw.csv"
+    out_base = f"{output_prefix}_part"
+
+    # 1. Convert .rw to CSV using rwcut
+    with open(temp_csv, "w") as f:
+        subprocess.run([
             "rwcut",
             "--fields", fields,
             "--delimited",
             "--no-title",
-            "--input-path", rw_file
-        ]
-        print(f"Extracting: {rw_file}")
-        with open(temp_csv, "w") as f:
-            subprocess.run(cmd, stdout=f)
-        temp_csvs.append(temp_csv)
+            input_rw
+        ], stdout=f)
 
-    return temp_csvs
+    # 2. Read and label
+    cols = ["sip", "dip", "sport", "dport", "stime", "etime", "proto", "packets", "bytes"]
+    df = pd.read_csv(temp_csv, names=cols)
+    df["label"] = df["dport"].map(attack_port_map).fillna("normal")
 
+    # 3. Split if necessary
+    if len(df) <= max_rows_per_csv:
+        out_file = f"{out_base}_{part_num}.csv"
+        df.to_csv(out_file, index=False)
+    else:
+        for i, start in enumerate(range(0, len(df), max_rows_per_csv)):
+            part_df = df.iloc[start:start + max_rows_per_csv]
+            part_df.to_csv(f"{out_base}_{part_num}_{i}.csv", index=False)
 
-def label_and_merge_csvs(csv_files, final_csv):
-    print("Merging and labeling data...")
-    columns = ["sip", "dip", "sport", "dport", "stime", "etime", "proto", "packets", "bytes"]
-    dfs = [pd.read_csv(f, names=columns) for f in csv_files]
-    full_df = pd.concat(dfs, ignore_index=True)
-
-    full_df["label"] = full_df["dport"].map(attack_port_map)
-    full_df["label"] = full_df["label"].fillna("normal")
-
-    full_df.to_csv(final_csv, index=False)
-    print(f"Labeled training dataset saved: {final_csv}")
+    os.remove(temp_csv)
 
 
 # === Main ===
 if __name__ == "__main__":
-    temp_csvs = extract_folder_to_csv(input_folder, temp_folder)
-    label_and_merge_csvs(temp_csvs, output_csv_file)
+    rw_files = sorted(glob(os.path.join(input_folder, "*")))
+    for idx, rw_file in enumerate(rw_files):
+        file_name = os.path.basename(rw_file).replace(".", "_")
+        output_prefix = os.path.join(output_folder, file_name)
+        print(f"📄 Processing {rw_file} -> {output_prefix}")
+        convert_and_label(rw_file, output_prefix, idx)
 
-    # cleanup temp files
-    for f in temp_csvs:
-        os.remove(f)
-    os.rmdir(temp_folder)
+    print(f"\n All done! Labeled CSVs saved in '{output_folder}/'")

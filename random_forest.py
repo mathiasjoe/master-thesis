@@ -1,76 +1,58 @@
-
 import pandas as pd
-import numpy as np
-from sklearn.model_selection import train_test_split, GridSearchCV
+import glob
+from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
-import matplotlib.pyplot as plt
-import seaborn as sns
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import classification_report, confusion_matrix
+import joblib  # for saving model
 
-# 1. Load Your Data
-# Replace 'silk_data.csv' with your actual data file.
-df = pd.read_csv('silk_data.csv')
+# Load all CSVs 
+csv_files = glob.glob("training_data/*.csv")
+print(f"📂 Found {len(csv_files)} CSV files")
 
-# Assume your dataset has already been preprocessed and includes a 'label' column
-# where 0 = benign and 1 = DDoS attack.
-# You may need to engineer additional features depending on your raw data.
+df_list = [pd.read_csv(f) for f in csv_files]
+df = pd.concat(df_list, ignore_index=True)
 
-# 2. Define Features and Labels
-# Drop any non-feature columns as needed.
-X = df.drop('label', axis=1)
-y = df['label']
+#  Preprocess 
 
-# 3. Split Data into Training and Testing Sets
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42, stratify=y
-)
+# Drop any rows with missing values
+df.dropna(inplace=True)
 
-# 4. Initialize and Train a Baseline Random Forest Model
-rf = RandomForestClassifier(n_estimators=100, random_state=42, class_weight='balanced')
-rf.fit(X_train, y_train)
+# Label encode IP addresses and protocol
+le_ip = LabelEncoder()
+df["sip_enc"] = le_ip.fit_transform(df["sip"])
+df["dip_enc"] = le_ip.fit_transform(df["dip"])
+df["proto_enc"] = LabelEncoder().fit_transform(df["proto"])
 
-# 5. Evaluate the Baseline Model
-y_pred = rf.predict(X_test)
-print("Classification Report:\n", classification_report(y_test, y_pred))
-print("Confusion Matrix:\n", confusion_matrix(y_test, y_pred))
-print("ROC AUC Score:", roc_auc_score(y_test, rf.predict_proba(X_test)[:, 1]))
 
-# 6. Hyperparameter Tuning using GridSearchCV
-param_grid = {
-    'n_estimators': [100, 200, 500],
-    'max_depth': [None, 10, 20, 30],
-    'min_samples_split': [2, 5, 10],
-    'min_samples_leaf': [1, 2, 4],
-    'bootstrap': [True, False]
-}
+feature_cols = ["sip_enc", "dip_enc", "sport", "dport", "proto_enc", "packets", "bytes"]
+X = df[feature_cols]
+y = df["label"]
 
-grid_search = GridSearchCV(
-    estimator=rf,
-    param_grid=param_grid,
-    cv=3,
-    n_jobs=-1,
-    verbose=2,
-    scoring='roc_auc'
-)
-grid_search.fit(X_train, y_train)
+# Encode labels
+le_label = LabelEncoder()
+y_encoded = le_label.fit_transform(y)
 
-print("Best Hyperparameters:", grid_search.best_params_)
+# Train/test split 
+X_train, X_test, y_train, y_test = train_test_split(X, y_encoded, test_size=0.25, random_state=42)
 
-# 7. Evaluate the Tuned Model
-best_rf = grid_search.best_estimator_
-y_pred_best = best_rf.predict(X_test)
-print("Tuned Model Classification Report:\n", classification_report(y_test, y_pred_best))
-print("Tuned Model Confusion Matrix:\n", confusion_matrix(y_test, y_pred_best))
-print("Tuned Model ROC AUC Score:", roc_auc_score(y_test, best_rf.predict_proba(X_test)[:, 1]))
+# Train Random Forest
+print("🌲 Training Random Forest...")
+clf = RandomForestClassifier(n_estimators=100, random_state=42)
+clf.fit(X_train, y_train)
 
-# 8. Feature Importance Analysis
-importances = best_rf.feature_importances_
-features = X.columns
-feature_importances = pd.Series(importances, index=features).sort_values(ascending=False)
+# Evaluate
+y_pred = clf.predict(X_test)
 
-plt.figure(figsize=(10, 6))
-sns.barplot(x=feature_importances, y=feature_importances.index)
-plt.xlabel('Importance Score')
-plt.ylabel('Features')
-plt.title('Feature Importance from Random Forest')
-plt.show()
+print("✅ Classification Report:")
+print(classification_report(y_test, y_pred, target_names=le_label.classes_))
+
+print("📊 Confusion Matrix:")
+print(confusion_matrix(y_test, y_pred))
+
+# Save model and encoders
+joblib.dump(clf, "rf_model.pkl")
+joblib.dump(le_label, "label_encoder.pkl")
+joblib.dump(le_ip, "ip_encoder.pkl")
+
+print("\n💾 Model and encoders saved!")
