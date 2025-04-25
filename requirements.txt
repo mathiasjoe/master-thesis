@@ -1,0 +1,8 @@
+Flask
+gensim
+joblib
+keras
+numpy
+pandas
+scikit_learn
+#silk==0.1
