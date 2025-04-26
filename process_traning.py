@@ -36,8 +36,8 @@ def convert_and_label(input_rw, output_prefix, part_num):
         subprocess.run([
             "rwcut",
             "--fields", fields,
-            "--delimited",
             "--no-title",
+            "--delimited=,",
             input_rw
         ], stdout=f)
 

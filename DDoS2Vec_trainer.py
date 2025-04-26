@@ -1,23 +1,65 @@
-# DDoS2Vec Trainer
-import pandas as pd
-from gensim.models import Word2Vec
-import numpy as np
-from keras.models import Sequential
-from keras.layers import LSTM, Dense
 import os
+import pandas as pd
+import numpy as np
+from gensim.models import Word2Vec
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report
 import joblib
 
-# Load corpus and train Word2Vec
-def train_embeddings(corpus_file, embedding_size=100):
-    with open(corpus_file, "r") as f:
-        sentences = [line.strip().split() for line in f.readlines()]
+# CONFIG 
+TRAINING_DATA_FOLDER = "training_data"
+EMBEDDING_MODEL_FILE = "ddos2vec_embedding.model"
+CLASSIFIER_FILE = "ddos2vec_classifier.pkl"
+LABEL_MAP_FILE = "ddos2vec_label_map.pkl"
+EMBEDDING_SIZE = 100
+CHUNK_SIZE = 1000000  # Read 1mill rows at a time
+WORKERS = os.cpu_count()  # Use all CPU cores
 
-    model = Word2Vec(sentences, vector_size=embedding_size, window=5, min_count=1)
-    model.save("ddos2vec_embedding.model")
-    #print("Word2Vec model saved.")
-    return model
 
-# Convert flow tokens to vectors
+# Create label map (fast vectorized) 
+def create_label_map(input_folder):
+    all_labels = []
+    for file in os.listdir(input_folder):
+        if file.endswith(".csv"):
+            for chunk in pd.read_csv(os.path.join(input_folder, file), usecols=["label"], chunksize=CHUNK_SIZE):
+                all_labels.extend(chunk["label"].tolist())
+
+    all_labels = list(set(all_labels))  # unique labels
+    label_map = {label: idx for idx, label in enumerate(sorted(all_labels))}
+    print(f" Label map created: {label_map}")
+    return label_map
+
+
+#  Sentence Generator 
+class FlowSentenceGenerator:
+    def __init__(self, csv_folder):
+        self.files = [os.path.join(csv_folder, f) for f in os.listdir(csv_folder) if f.endswith(".csv")]
+
+    def __iter__(self):
+        for file in self.files:
+            for chunk in pd.read_csv(file, usecols=["proto", "sport", "dport"], chunksize=CHUNK_SIZE):
+                chunk["sentence"] = chunk["proto"].astype(str) + "_" + chunk["sport"].astype(str) + "_" + chunk["dport"].astype(str)
+                for sentence in chunk["sentence"]:
+                    yield sentence.split()
+
+
+# Train Word2Vec Model 
+def train_word2vec(csv_folder, embedding_model_path, embedding_size=100):
+    sentences = FlowSentenceGenerator(csv_folder)
+    w2v_model = Word2Vec(
+        sentences,
+        vector_size=embedding_size,
+        window=5,
+        min_count=1,
+        workers=WORKERS
+    )
+    w2v_model.save(embedding_model_path)
+    print(f" Word2Vec model saved to: {embedding_model_path}")
+    return w2v_model
+
+
+#  Convert sentence to vector 
 def sentence_to_vec(sentence, w2v_model):
     words = sentence.split()
     vecs = [w2v_model.wv[w] for w in words if w in w2v_model.wv]
@@ -25,46 +67,57 @@ def sentence_to_vec(sentence, w2v_model):
         return np.zeros(w2v_model.vector_size)
     return np.mean(vecs, axis=0)
 
-# Train LSTM classifier 
-def train_lstm_classifier(csv_folder, embedding_model_path="ddos2vec_embedding.model"):
-    model = Word2Vec.load(embedding_model_path)
-    X, y = [], []
 
-    label_map = {}
-    label_counter = 0
+# Prepare Dataset (vectorized) 
+def prepare_dataset(input_folder, w2v_model, label_map):
+    X = []
+    y = []
 
-    for file in os.listdir(csv_folder):
+    for file in os.listdir(input_folder):
         if file.endswith(".csv"):
-            df = pd.read_csv(os.path.join(csv_folder, file))
-            df["sentence"] = df["proto"].astype(str) + "_" + df["sport"].astype(str) + "_" + df["dport"].astype(str)
-            for _, row in df.iterrows():
-                label = row["label"]
-                if label not in label_map:
-                    label_map[label] = label_counter
-                    label_counter += 1
-                vec = sentence_to_vec(row["sentence"], model)
-                X.append(vec)
-                y.append(label_map[label])
+            for chunk in pd.read_csv(os.path.join(input_folder, file), usecols=["proto", "sport", "dport", "label"], chunksize=CHUNK_SIZE):
+                chunk["sentence"] = chunk["proto"].astype(str) + "_" + chunk["sport"].astype(str) + "_" + chunk["dport"].astype(str)
+                chunk["label_encoded"] = chunk["label"].map(label_map)
+
+                X.extend([sentence_to_vec(s, w2v_model) for s in chunk["sentence"]])
+                y.extend(chunk["label_encoded"].tolist())
 
     X = np.array(X)
     y = np.array(y)
+    print(f" Prepared dataset: {X.shape[0]} samples")
+    return X, y
 
-    # LSTM expects 3D input
-    X = X.reshape((X.shape[0], 1, X.shape[1]))
 
-    classifier = Sequential()
-    classifier.add(LSTM(64, input_shape=(1, model.vector_size)))
-    classifier.add(Dense(len(label_map), activation="softmax"))
+# Train Classifier 
+def train_classifier(X, y):
+    clf = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
 
-    classifier.compile(loss="sparse_categorical_crossentropy", optimizer="adam", metrics=["accuracy"])
-    classifier.fit(X, y, epochs=5, batch_size=64, verbose=1)
+    clf.fit(X_train, y_train)
 
-    classifier.save("ddos2vec_lstm.h5")
-    joblib.dump(label_map, "ddos2vec_label_map.pkl")
-    print("LSTM model and label map saved.")
+    y_pred = clf.predict(X_test)
+    print(" Classification Report:")
+    print(classification_report(y_test, y_pred))
 
-#  Run all
+    return clf
+
+
+# MAIN
 if __name__ == "__main__":
-    generate_corpus("training_data")  # folder with labeled flow CSVs
-    train_embeddings("ddos2vec_corpus.txt")
-    train_lstm_classifier("training_data")
+    print(" Creating label map...")
+    label_map = create_label_map(TRAINING_DATA_FOLDER)
+
+    print(" Training Word2Vec model...")
+    w2v_model = train_word2vec(TRAINING_DATA_FOLDER, EMBEDDING_MODEL_FILE, embedding_size=EMBEDDING_SIZE)
+
+    print(" Preparing dataset...")
+    X, y = prepare_dataset(TRAINING_DATA_FOLDER, w2v_model, label_map)
+
+    print(" Training classifier...")
+    classifier = train_classifier(X, y)
+
+    # Save everything
+    joblib.dump(classifier, CLASSIFIER_FILE)
+    joblib.dump(label_map, LABEL_MAP_FILE)
+
+    print("\n DDoS2Vec training complete! Models and label map saved.")

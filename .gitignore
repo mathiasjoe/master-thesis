@@ -4,3 +4,5 @@ training_data/
 tools/
 venv/
 final_dataset_01/
+final_dataset_02/
+*.pkl
