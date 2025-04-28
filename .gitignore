@@ -5,4 +5,7 @@ tools/
 venv/
 final_dataset_01/
 final_dataset_02/
+attack_data/
+results_attack_eval/
 *.pkl
+*.model

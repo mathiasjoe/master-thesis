@@ -8,12 +8,12 @@ from sklearn.metrics import classification_report
 import joblib
 
 # CONFIG 
-TRAINING_DATA_FOLDER = "training_data"
+TRAINING_DATA_FOLDER = "training_data/"
 EMBEDDING_MODEL_FILE = "ddos2vec_embedding.model"
 CLASSIFIER_FILE = "ddos2vec_classifier.pkl"
 LABEL_MAP_FILE = "ddos2vec_label_map.pkl"
 EMBEDDING_SIZE = 100
-CHUNK_SIZE = 1000000  # Read 1mill rows at a time
+CHUNK_SIZE = 500000  # Read 500k rows at a time
 WORKERS = os.cpu_count()  # Use all CPU cores
 
 
@@ -109,7 +109,7 @@ if __name__ == "__main__":
 
     print(" Training Word2Vec model...")
     w2v_model = train_word2vec(TRAINING_DATA_FOLDER, EMBEDDING_MODEL_FILE, embedding_size=EMBEDDING_SIZE)
-
+""" 
     print(" Preparing dataset...")
     X, y = prepare_dataset(TRAINING_DATA_FOLDER, w2v_model, label_map)
 
@@ -119,5 +119,5 @@ if __name__ == "__main__":
     # Save everything
     joblib.dump(classifier, CLASSIFIER_FILE)
     joblib.dump(label_map, LABEL_MAP_FILE)
-
-    print("\n DDoS2Vec training complete! Models and label map saved.")
+ """
+    #print("\n DDoS2Vec training complete! Models and label map saved.")
