@@ -3,9 +3,11 @@ import os
 import glob
 import joblib
 from sklearn.metrics import classification_report, confusion_matrix, precision_recall_fscore_support
+from gensim.models import Word2Vec
+import numpy as np
 
 # === CONFIG ===
-ATTACK_DATA_FOLDER = "attack_data" 
+ATTACK_DATA_FOLDER = "training_data" 
 OUTPUT_FOLDER = "results_attack_eval"
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
@@ -19,11 +21,9 @@ rf_label_encoder = joblib.load("rf_label_encoder.pkl")
 nb_model = joblib.load("nb_model.pkl")
 nb_label_encoder = joblib.load("nb_label_encoder.pkl")
 
-# Helper to prepare attack data
 def prepare_attack_data(file_path):
-    # Correct column names
-    columns = ["sip", "dip", "sport", "dport", "proto", "packets", "bytes", "stime", "etime", "label"]
-    df = pd.read_csv(file_path, names=columns)
+    # Read the CSV file normally, since it already contains headers
+    df = pd.read_csv(file_path, low_memory=False)
 
     # Encode protocol field
     df["proto_enc"] = pd.factorize(df["proto"])[0]
@@ -31,7 +31,9 @@ def prepare_attack_data(file_path):
     # Select the correct features
     feature_cols = ["sport", "dport", "proto_enc", "packets", "bytes"]
     X = df[feature_cols]
+
     return df, X
+
 
 # Evaluate models
 models = {
@@ -63,8 +65,6 @@ for name, (model, label_encoder) in models.items():
     if all_true and all_pred:
         print(" Classification Report:")
         print(classification_report(all_true, all_pred, target_names=label_encoder.classes_))
-        print("📊 Confusion Matrix:")
-        print(confusion_matrix(all_true, all_pred))
 
         # Save high-level model metrics
         precision, recall, f1, support = precision_recall_fscore_support(all_true, all_pred, average='weighted')
@@ -107,34 +107,69 @@ if detailed_metrics:
 else:
     print("\n No detailed report generated. Check your labels/data.")
 
-""" # === Evaluate DDoS2Vec separately ===
+ # === Evaluate DDoS2Vec separately ===
 print("\n Evaluating model: DDoS2Vec")
 
-all_attack_files = glob.glob(os.path.join(ATTACK_DATA_FOLDER, "*.csv"))
-merged_attack_file = "merged_attacks.csv"
-merged_df = pd.concat([pd.read_csv(f) for f in all_attack_files], ignore_index=True)
-merged_df.to_csv(merged_attack_file, index=False)
+# Load the models
+w2v_model = Word2Vec.load("ddos2vec_embedding.model")
+classifier = joblib.load("ddos2vec_classifier.pkl")
+label_map = joblib.load("ddos2vec_label_map.pkl")
+inv_label_map = {v: k for k, v in label_map.items()}
 
-predict_ddos2vec(merged_attack_file)
+def sentence_to_vec(sentence, w2v_model):
+    words = sentence.split()
+    vecs = [w2v_model.wv[w] for w in words if w in w2v_model.wv]
+    if not vecs:
+        return np.zeros(w2v_model.vector_size)
+    return np.mean(vecs, axis=0)
 
-df_ddos = pd.read_csv("ddos2vec_predictions.csv")
-df_ddos.to_csv(os.path.join(OUTPUT_FOLDER, "ddos2vec_predictions.csv"), index=False)
+# Prepare DDoS2Vec dataset
+all_true, all_pred = [], []
 
-# Evaluation
-ddos_report = classification_report(df_ddos["label"], df_ddos["predicted_label"], output_dict=True)
-precision, recall, f1, support = precision_recall_fscore_support(
-    df_ddos["label"], df_ddos["predicted_label"], average='weighted')
+for file_path in glob.glob(os.path.join(ATTACK_DATA_FOLDER, "*.csv")):
+    df = pd.read_csv(file_path, usecols=["proto", "sport", "dport", "label"])
+    df = df.dropna(subset=["label"])  # remove rows without labels
 
-metrics_summary.append({
-    "model": "DDoS2Vec",
-    "precision": round(precision, 4),
-    "recall": round(recall, 4),
-    "f1_score": round(f1, 4),
-    "support": support
-})
+    df["sentence"] = df["proto"].astype(str) + "_" + df["sport"].astype(str) + "_" + df["dport"].astype(str)
+    df["label_encoded"] = df["label"].map(label_map)
 
-print(" Classification Report:")
-print(classification_report(df_ddos["label"], df_ddos["predicted_label"]))
-print(" Confusion Matrix:")
-print(confusion_matrix(df_ddos["label"], df_ddos["predicted_label"])) """
+    X = np.array([sentence_to_vec(s, w2v_model) for s in df["sentence"]])
+    y_true = df["label_encoded"].tolist()
+    y_pred = classifier.predict(X)
+
+    all_true.extend(y_true)
+    all_pred.extend(y_pred)
+
+# Evaluate
+if all_true and all_pred:
+    from sklearn.metrics import classification_report, confusion_matrix, precision_recall_fscore_support
+
+    print(" Classification Report:")
+    print(classification_report(all_true, all_pred, target_names=[inv_label_map[i] for i in sorted(inv_label_map)]))
+
+    precision, recall, f1, support = precision_recall_fscore_support(all_true, all_pred, average='weighted')
+    metrics_summary.append({
+        "model": "DDoS2Vec",
+        "precision": round(precision, 4),
+        "recall": round(recall, 4),
+        "f1_score": round(f1, 4),
+        "support": support
+    })
+
+    # Detailed metrics
+    detailed = classification_report(all_true, all_pred, target_names=[inv_label_map[i] for i in sorted(inv_label_map)], output_dict=True)
+    for label, scores in detailed.items():
+        if label in ['accuracy', 'macro avg', 'weighted avg']:
+            continue
+        detailed_metrics.append({
+            "model": "DDoS2Vec",
+            "class": label,
+            "precision": round(scores["precision"], 4),
+            "recall": round(scores["recall"], 4),
+            "f1_score": round(scores["f1-score"], 4),
+            "support": int(scores["support"])
+        })
+
+else:
+    print(" No valid DDoS2Vec evaluation data found.")
 

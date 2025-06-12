@@ -9,3 +9,4 @@ attack_data/
 results_attack_eval/
 *.pkl
 *.model
+*.npy 
